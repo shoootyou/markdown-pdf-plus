@@ -1,0 +1,73 @@
+# ==============================================================================
+# pr.yml — CI quality gate for pull requests targeting main
+# ==============================================================================
+#
+# Runs on every pull request opened, updated, or reopened against main.
+# Validates that the code:
+#   - compiles cleanly under TypeScript strict mode
+#   - passes ESLint
+#   - bundles successfully with esbuild (production minify)
+#   - packages into a valid .vsix without errors
+#
+# No secrets are required — this workflow is safe for pull requests from forks
+# and external contributors.
+#
+# ==============================================================================
+
+name: pr
+
+on:
+  pull_request:
+    branches: [main]
+
+# Cancel an in-progress run for the same PR branch when a new commit is pushed.
+# This avoids wasting runner minutes on outdated commits.
+concurrency:
+  group: pr-${{ github.head_ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    name: Compile · Lint · Build · Package
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── 1. Checkout ──────────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      # ── 2. Node.js + yarn cache ───────────────────────────────────────────────
+      - name: Set up Node.js 20
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "20"
+          cache: "yarn"
+
+      # ── 3. Install dependencies ───────────────────────────────────────────────
+      # --frozen-lockfile rejects any yarn.lock drift introduced by the PR.
+      # Note: .yarnrc already carries --ignore-engines; no extra flag needed.
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      # ── 4. TypeScript compile check ───────────────────────────────────────────
+      # Runs `tsc -p ./` — verifies strict-mode type correctness across the whole
+      # source tree without producing a production bundle.
+      - name: TypeScript compile check
+        run: yarn run compile
+
+      # ── 5. ESLint ─────────────────────────────────────────────────────────────
+      - name: ESLint
+        run: yarn run lint
+
+      # ── 6. Production bundle (esbuild, minified) ──────────────────────────────
+      # Verifies that esbuild can bundle src/extension.ts with --minify without
+      # errors (e.g. unresolvable imports, dynamic import() issues).
+      - name: Build production bundle
+        run: yarn run vscode:prepublish
+
+      # ── 7. Package VSIX ───────────────────────────────────────────────────────
+      # Runs `vsce package --yarn` end-to-end to catch any packaging errors
+      # (missing files, .vscodeignore issues, manifest validation failures).
+      # The VSIX is not published or uploaded — this step is a dry-run gate only.
+      - name: Package VSIX (dry run)
+        run: yarn run package
