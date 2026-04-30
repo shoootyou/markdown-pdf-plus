@@ -25,8 +25,6 @@ Export Markdown as PDF or HTML — with custom CSS, Mermaid diagrams, table styl
 
 No setup required. Install the extension, open any Markdown file, and run one of the export commands from the Command Palette. Chromium is downloaded automatically on first use.
 
-> **Note:** This extension depends on [Markdown All in One](https://marketplace.visualstudio.com/items?itemName=yzhang.markdown-all-in-one), which is installed automatically.
-
 ---
 
 ## Usage
