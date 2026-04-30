@@ -9,7 +9,6 @@ import {
   WorkspaceConfiguration,
 } from "vscode";
 import * as crypto from "crypto";
-import { promises as fs } from "fs";
 
 import { TestFS } from "./memfs";
 import SettingsCategory from "../interfaces/settingsCategory";
@@ -83,9 +82,6 @@ export function withRandomFileEditor(
 
 /**
  * Returns a copy of the user settings for the given extension.
- *
- * @param extension The instance of the extension for which to get a user's settings.
- * @param config The current settings configuration for the given extension.
  */
 const cloneExtensionSettings = (
   extension: Extension<any>,
@@ -104,31 +100,12 @@ const cloneExtensionSettings = (
 
 const getSettingNamesFromConfig = (arr: SettingsCategory[]): string[] => {
   const keys: string[] = [];
-
   for (const item of arr) {
     for (const key in item.properties) {
       keys.push(key);
     }
   }
-
   return keys;
 };
 
-const checkFileExists = async (path: string, timeout: number): Promise<boolean> => {
-  const startTime = Date.now();
-  const endTime = startTime + timeout;
-
-  while (Date.now() < endTime) {
-    try {
-      await fs.access(path); // Check if the file exists
-      return true; // File found, return true
-    } catch (error) {
-      // File doesn't exist yet, wait for a short interval
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
-  }
-
-  return false; // File not found within the timeout
-};
-
-export { checkFileExists, cloneExtensionSettings };
+export { cloneExtensionSettings };

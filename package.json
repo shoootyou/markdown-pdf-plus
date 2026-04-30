@@ -3,7 +3,7 @@
   "version": "1.2.0",
   "publisher": "tom-latham",
   "engines": {
-    "vscode": "^1.75.0"
+    "vscode": "^1.85.0"
   },
   "license": "SEE LICENSE IN LICENSE.md",
   "displayName": "Markdown PDF Plus",
@@ -87,48 +87,79 @@
           "type": "boolean",
           "default": false,
           "markdownDescription": "Give any [@page](https://developer.mozilla.org/en-US/docs/Web/CSS/@page) at-rule declared in CSS priority over the extension's default page settings."
+        },
+        "markdown-pdf-plus.chromiumPath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "markdownDescription": "Path to a Chromium or Chrome executable for PDF rendering. Used instead of the auto-detected bundled Chromium. Only configurable in user/machine settings (not workspace)."
+        },
+        "markdown-pdf-plus.puppeteerSandbox": {
+          "type": "string",
+          "enum": ["auto", "on", "off"],
+          "default": "auto",
+          "scope": "machine",
+          "markdownDescription": "Chromium sandbox mode for PDF rendering.\n\n- `auto` (default): Tries sandboxed first, falls back to unsandboxed.\n- `on`: Always sandboxed (may fail on some Linux systems).\n- `off`: Always runs without sandbox (`--no-sandbox`)."
+        },
+        "markdown-pdf-plus.allowExternalResources": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Allow embedding images and stylesheets from outside the workspace folder during export. Disable when working with untrusted content to prevent local file reads."
+        },
+        "markdown-pdf-plus.tableStyle": {
+          "type": "string",
+          "enum": ["none", "minimal", "bordered", "striped"],
+          "default": "bordered",
+          "markdownDescription": "Table styling preset for PDF output. **none**: page-break handling only, **minimal**: light bottom borders, **bordered**: full grid borders, **striped**: bordered with alternating row colors."
+        },
+        "markdown-pdf-plus.pdfTimeout": {
+          "type": "number",
+          "default": 60,
+          "minimum": 5,
+          "markdownDescription": "Maximum time in seconds to wait for PDF generation to complete. Increase for complex documents with many images or Mermaid diagrams."
         }
       }
     }
   },
   "activationEvents": [],
   "dependencies": {
-    "cheerio": "^1.0.0-rc.12",
-    "puppeteer": "^20.2.1",
-    "puppeteer-chromium-resolver": "^20.0.0"
+    "cheerio": "^1.2.0",
+    "puppeteer": "^24.42.0",
+    "puppeteer-chromium-resolver": "^24.0.3"
   },
   "devDependencies": {
-    "@types/glob": "^8.1.0",
-    "@types/jsdom": "^21.1.7",
-    "@types/mocha": "^10.0.1",
-    "@types/node": "16.x",
-    "@types/sinon": "^10.0.15",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "^20.19.39",
+    "@types/sinon": "^17.0.4",
     "@types/vscode": "^1.75.0",
-    "@typescript-eslint/eslint-plugin": "^5.59.1",
-    "@typescript-eslint/parser": "^5.59.1",
-    "@vscode/test-electron": "^2.3.0",
-    "eslint": "^8.39.0",
-    "eslint-config-prettier": "^8.8.0",
-    "eslint-import-resolver-typescript": "^3.5.5",
-    "eslint-plugin-import": "^2.27.5",
-    "glob": "^8.1.0",
-    "mocha": "^10.2.0",
-    "prettier": "^2.8.8",
-    "should": "^13.2.3",
-    "sinon": "^15.1.0",
-    "typescript": "^5.0.4",
-    "vscode": "^1.1.37"
+    "@typescript-eslint/eslint-plugin": "^8.34.0",
+    "@typescript-eslint/parser": "^8.34.0",
+    "@vscode/test-electron": "^2.5.2",
+    "@vscode/vsce": "^3.9.1",
+    "esbuild": "^0.28.0",
+    "eslint": "^8.57.0",
+    "eslint-config-prettier": "^10.1.5",
+    "eslint-import-resolver-typescript": "^4.4.3",
+    "eslint-plugin-import": "^2.31.0",
+    "mocha": "^11.7.5",
+    "prettier": "^3.8.3",
+    "sinon": "^21.1.2",
+    "typescript": "^5.9.3"
   },
   "extensionDependencies": [
     "yzhang.markdown-all-in-one"
   ],
   "scripts": {
-    "vscode:prepublish": "yarn run compile",
+    "vscode:prepublish": "yarn run esbuild-base --minify",
     "compile": "tsc -p ./",
+    "esbuild-base": "esbuild ./src/extension.ts --bundle --outfile=out/extension.js --external:vscode --external:puppeteer --external:puppeteer-chromium-resolver --format=cjs --platform=node --target=node20",
+    "esbuild": "yarn run esbuild-base --sourcemap",
+    "esbuild-watch": "yarn run esbuild-base --sourcemap --watch",
     "watch": "tsc -watch -p ./",
     "pretest": "yarn run compile && yarn run lint",
     "lint": "eslint src --ext ts",
-    "test": "node ./out/test/runTest.js"
+    "test": "node ./out/test/runTest.js",
+    "package": "vsce package --yarn"
   },
   "icon": "./public/icon_white_background_white_border.png",
   "repository": {

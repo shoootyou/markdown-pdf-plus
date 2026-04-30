@@ -1,14 +1,12 @@
 import * as vscode from "vscode";
 import { ExtensionContext, Uri, Webview } from "vscode";
 import path from "path";
+import { promises as fs } from "fs";
 
 import LanguageIdentifiers from "../constants/languageIdentifiers";
 
 /**
  * Determines whether the given document is Markdown.
- *
- * @param doc The document whose Markdown-ness is to be determined.
- * @returns True if the given document is Markdown.
  */
 const isMdDocument = (doc: vscode.TextDocument | undefined): boolean => {
   /*---------------------------------------------------------------------------------------------
@@ -32,11 +30,6 @@ const isMdDocument = (doc: vscode.TextDocument | undefined): boolean => {
 
 /**
  * Returns the absolute path to a file located in the MRS package.
- *
- * @param relativePath A relative path to a resource contained in the extension.
- * @param context The context of this extension to get its path regardless where it is installed.
- * @param webview When given format the path for use in this webview.
- * @returns The absolute path to a file located in our misc folder.
  */
 const getAbsolutePath = (
   relativePath: string,
@@ -51,15 +44,7 @@ const getAbsolutePath = (
 };
 
 /**
- * Returns the given filename (of filetype described by `currentExtension`) and returns the same filename
- * but with the `desiredExtension` appended to the end.
- *
- * @param filename The name of the file for which to change the extension.
- * @param currentExtension The file extension which describes the format of the file whose name is to be changed.
- *  Includes the "." (e.g., use `.md`, not `md`).
- * @param desiredExtension The file extension of the outputted filename.
- * Includes the "." (e.g., use `.html`, not `html`).
- *
+ * Converts a filename from one extension to another.
  */
 const convertFileExtension = (
   filename: string,
@@ -71,4 +56,20 @@ const convertFileExtension = (
     : filename + desiredExtension;
 };
 
-export { convertFileExtension, getAbsolutePath, isMdDocument };
+/**
+ * Polls for a file to exist on disk within the given timeout (ms).
+ */
+const checkFileExists = async (filePath: string, timeout: number): Promise<boolean> => {
+  const endTime = Date.now() + timeout;
+  while (Date.now() < endTime) {
+    try {
+      await fs.access(filePath);
+      return true;
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }
+  return false;
+};
+
+export { convertFileExtension, getAbsolutePath, isMdDocument, checkFileExists };
