@@ -87,6 +87,24 @@
           "type": "boolean",
           "default": false,
           "markdownDescription": "Give any [@page](https://developer.mozilla.org/en-US/docs/Web/CSS/@page) at-rule declared in CSS priority over the extension's default page settings."
+        },
+        "markdown-pdf-plus.chromiumPath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "markdownDescription": "Path to a Chromium or Chrome executable for PDF rendering. Used instead of the auto-detected bundled Chromium. Only configurable in user/machine settings (not workspace)."
+        },
+        "markdown-pdf-plus.puppeteerSandbox": {
+          "type": "string",
+          "enum": ["auto", "on", "off"],
+          "default": "auto",
+          "scope": "machine",
+          "markdownDescription": "Chromium sandbox mode for PDF rendering.\n\n- `auto` (default): Tries sandboxed first, falls back to unsandboxed.\n- `on`: Always sandboxed (may fail on some Linux systems).\n- `off`: Always runs without sandbox (`--no-sandbox`)."
+        },
+        "markdown-pdf-plus.allowExternalResources": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Allow embedding images and stylesheets from outside the workspace folder during export. Disable when working with untrusted content to prevent local file reads."
         }
       }
     }

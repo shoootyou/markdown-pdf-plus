@@ -6,6 +6,12 @@ import crypto = require("crypto");
 import UIMessages from "../constants/uiMessages";
 import { isMdDocument, convertFileExtension } from "../util/general";
 import { checkFileExists } from "../test/util/general";
+import {
+  sanitizeCssForStyleTag,
+  generateNonce,
+  buildCspContent,
+  sanitizeFilename,
+} from "../util/security";
 
 /**
  * Exports the current Markdown document (whether by current editor or configured path) to HTML.
@@ -50,10 +56,19 @@ const exportHtml = async (isCalledFromExportPdf = false): Promise<[string, strin
     const htmlFilePath = convertFileExtension(doc.fileName, ".md", ".html");
     let htmlContent = fs.readFileSync(htmlFilePath, "utf-8");
 
+    // Security: generate nonce for CSP and inject CSP meta tag
+    const nonce = generateNonce();
+    const cspMeta = `<meta http-equiv="Content-Security-Policy" content="${buildCspContent(nonce)}">`;
+    const headIndex = htmlContent.indexOf("<head>");
+    if (headIndex !== -1) {
+      htmlContent =
+        htmlContent.slice(0, headIndex + 6) + "\n" + cspMeta + htmlContent.slice(headIndex + 6);
+    }
+
     // Modify the HTML content to render Mermaid diagrams as SVGs
     const mermaidScript = `
-    <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
-    <script>
+    <script nonce="${nonce}" src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+    <script nonce="${nonce}">
       mermaid.initialize({ startOnLoad: true });
     </script>`;
 
@@ -77,13 +92,13 @@ const exportHtml = async (isCalledFromExportPdf = false): Promise<[string, strin
     const stylesheetPathFromExtensionSettings = config.get("CSSPath", "");
     if (stylesheetPathFromExtensionSettings && fs.existsSync(stylesheetPathFromExtensionSettings)) {
       const stylesheetContent = fs.readFileSync(stylesheetPathFromExtensionSettings, "utf-8");
-      const styleTag = `<style>${stylesheetContent}</style>`;
+      const styleTag = `<style>${sanitizeCssForStyleTag(stylesheetContent)}</style>`;
       htmlContent += styleTag;
     }
 
     const rawStylesFromExtensionSettings = config.get("CSSRaw", "");
     if (rawStylesFromExtensionSettings) {
-      const styleTag = `<style>${rawStylesFromExtensionSettings}</style>`;
+      const styleTag = `<style>${sanitizeCssForStyleTag(rawStylesFromExtensionSettings)}</style>`;
       htmlContent += styleTag;
     }
 
@@ -101,9 +116,10 @@ const exportHtml = async (isCalledFromExportPdf = false): Promise<[string, strin
 
   // Rename the file if user wants or if calling from export PDF,
   // and move it if not calling from export PDF and user wants
+  const outputRawFilename = config.get("outputFilename", "");
   const outputFilename = isCalledFromExportPdf
     ? crypto.randomBytes(20).toString("hex")
-    : config.get("outputFilename", "") || path.parse(doc.fileName).name;
+    : sanitizeFilename(outputRawFilename) || path.parse(doc.fileName).name;
   const outputHome = config.get("outputHome", "");
 
   if (outputFilename !== path.parse(doc.fileName).name || (outputHome && !isCalledFromExportPdf)) {

@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 import * as fs from "fs";
 import path = require("path");
-import puppeteer, { Page } from "puppeteer";
+import puppeteer, { Browser, Page } from "puppeteer";
 import { load } from "cheerio";
 import PCR from "puppeteer-chromium-resolver";
 import crypto = require("crypto");
@@ -10,6 +10,12 @@ import UIMessages from "../constants/uiMessages";
 import exportHtml from "./export.html";
 import StylesheetInfo from "../interfaces/stylesheetInfo";
 import { isMdDocument } from "../util/general";
+import {
+  sanitizeCssForStyleTag,
+  validateCssLength,
+  validatePageSize,
+  isPathWithinBoundary,
+} from "../util/security";
 
 let conditionalUIMessage = "";
 
@@ -88,12 +94,9 @@ const convertHtmlToPdf = async (htmlFilePath: string, pdfFilePath: string): Prom
       vscode.workspace.getConfiguration("markdown-pdf-plus");
 
     const preferCSSPageSize: boolean = config.get("usePageStyleFromCSS", false);
-    const stats = await PCR({});
-
-    const browser = await puppeteer.launch({
-      args: ["--no-sandbox"],
-      executablePath: stats.executablePath,
-    });
+    const executablePath = await resolveChromiumPath(config);
+    const sandboxMode = (config.get("puppeteerSandbox", "auto") as string) || "auto";
+    const browser = await launchBrowser(executablePath, sandboxMode);
     const page = await browser.newPage();
 
     // Emulate screen media type to remove default header and footer
@@ -114,11 +117,18 @@ const convertHtmlToPdf = async (htmlFilePath: string, pdfFilePath: string): Prom
       }
     );
 
+    // Security: resolve workspace boundary for file reads
+    const allowExternalResources: boolean = config.get("allowExternalResources", true);
+    const workspaceBoundary =
+      vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || path.dirname(htmlFilePath);
+
     // 2–4: cheerio-based transforms (now safe — Mermaid blocks are placeholders)
     let htmlContent = await injectPageStyle(
       await replaceLocalBackgroundImagesWithBase64InMemory(
-        replaceLocalImgSrcWithBase64(rawHtml),
-        htmlFilePath
+        replaceLocalImgSrcWithBase64(rawHtml, allowExternalResources, workspaceBoundary),
+        htmlFilePath,
+        allowExternalResources,
+        workspaceBoundary
       )
     );
 
@@ -133,7 +143,7 @@ const convertHtmlToPdf = async (htmlFilePath: string, pdfFilePath: string): Prom
 
     // Set content of the page to the temporary HTML file
     await page.goto(`file://${tempHtmlFilePath}`, { waitUntil: "networkidle0" });
-    await addExternalStylesheetsToPage(htmlFilePath, page);
+    await addExternalStylesheetsToPage(htmlFilePath, page, allowExternalResources, workspaceBoundary);
 
     // Wait for Mermaid diagrams to finish rendering (if any)
     const hasMermaid = await page.evaluate(
@@ -179,7 +189,12 @@ const convertHtmlToPdf = async (htmlFilePath: string, pdfFilePath: string): Prom
   }
 };
 
-const addExternalStylesheetsToPage = async (htmlFilePath: string, page: Page): Promise<void> => {
+const addExternalStylesheetsToPage = async (
+  htmlFilePath: string,
+  page: Page,
+  allowExternalResources: boolean,
+  boundary: string
+): Promise<void> => {
   const fileContent = await fs.promises.readFile(htmlFilePath, "utf8");
   const stylesheets = extractStylesheetsFromHtml(fileContent, htmlFilePath);
 
@@ -192,6 +207,10 @@ const addExternalStylesheetsToPage = async (htmlFilePath: string, page: Page): P
         conditionalUIMessage = UIMessages.exportToPdfSucceededExternalCssFailed;
       }
     } else {
+      if (!allowExternalResources && !isPathWithinBoundary(stylesheet.path, boundary)) {
+        console.warn(`[markdown-pdf-plus] Skipping stylesheet outside workspace: ${stylesheet.path}`);
+        continue;
+      }
       const stylesheetContent = await fs.promises.readFile(stylesheet.path, "utf8");
       await page.addStyleTag({ content: stylesheetContent });
     }
@@ -218,17 +237,29 @@ const extractStylesheetsFromHtml = (
   return stylesheets;
 };
 
-const replaceLocalImgSrcWithBase64 = (htmlContent: string): string => {
+const replaceLocalImgSrcWithBase64 = (
+  htmlContent: string,
+  allowExternalResources: boolean,
+  boundary: string
+): string => {
   const $ = load(htmlContent);
 
   $("img[src]").each((_, element) => {
     const src = $(element).attr("src");
     if (src && !isExternalReference(src)) {
       const imagePath = path.resolve(src.replace("file:///", ""));
-      const imageContent = fs.readFileSync(imagePath).toString("base64");
-      const mimeType = getImageMimeType(imagePath);
-      const dataUri = `data:${mimeType};base64,${imageContent}`;
-      $(element).attr("src", dataUri);
+      if (!allowExternalResources && !isPathWithinBoundary(imagePath, boundary)) {
+        console.warn(`[markdown-pdf-plus] Skipping image outside workspace: ${imagePath}`);
+        return;
+      }
+      try {
+        const imageContent = fs.readFileSync(imagePath).toString("base64");
+        const mimeType = getImageMimeType(imagePath);
+        const dataUri = `data:${mimeType};base64,${imageContent}`;
+        $(element).attr("src", dataUri);
+      } catch {
+        console.warn(`[markdown-pdf-plus] Could not read image: ${imagePath}`);
+      }
     }
   });
 
@@ -237,7 +268,9 @@ const replaceLocalImgSrcWithBase64 = (htmlContent: string): string => {
 
 const replaceLocalBackgroundImagesWithBase64InMemory = async (
   htmlContent: string,
-  htmlFilePath: string
+  htmlFilePath: string,
+  allowExternalResources: boolean,
+  boundary: string
 ): Promise<string> => {
   const $ = load(htmlContent);
 
@@ -245,28 +278,47 @@ const replaceLocalBackgroundImagesWithBase64InMemory = async (
   const stylesheets = extractStylesheetsFromHtml(htmlContent, htmlFilePath);
   for (const stylesheet of stylesheets) {
     if (!stylesheet.isExternal) {
+      if (!allowExternalResources && !isPathWithinBoundary(stylesheet.path, boundary)) {
+        console.warn(`[markdown-pdf-plus] Skipping CSS outside workspace: ${stylesheet.path}`);
+        continue;
+      }
       const cssContent = await fs.promises.readFile(stylesheet.path, "utf8");
       const updatedCssContent = await replaceLocalUrlsWithBase64(
         cssContent,
-        path.dirname(stylesheet.path)
+        path.dirname(stylesheet.path),
+        allowExternalResources,
+        boundary
       );
 
-      // Inject the modified CSS content into the HTML
-      $("head").append(`<style>${updatedCssContent}</style>`);
+      $("head").append(`<style>${sanitizeCssForStyleTag(updatedCssContent)}</style>`);
     }
   }
 
   return $.html();
 };
 
-const replaceLocalUrlsWithBase64 = async (cssContent: string, cssDir: string): Promise<string> => {
+const replaceLocalUrlsWithBase64 = async (
+  cssContent: string,
+  cssDir: string,
+  allowExternalResources: boolean,
+  boundary: string
+): Promise<string> => {
   return cssContent.replace(/url\(["']?(.*?)["']?\)/g, (match, url) => {
     if (!isExternalReference(url)) {
       const imagePath = path.resolve(cssDir, url);
-      const imageContent = fs.readFileSync(imagePath).toString("base64");
-      const mimeType = getImageMimeType(imagePath);
-      const dataUri = `data:${mimeType};base64,${imageContent}`;
-      return `url(${dataUri})`;
+      if (!allowExternalResources && !isPathWithinBoundary(imagePath, boundary)) {
+        console.warn(`[markdown-pdf-plus] Skipping CSS resource outside workspace: ${imagePath}`);
+        return match;
+      }
+      try {
+        const imageContent = fs.readFileSync(imagePath).toString("base64");
+        const mimeType = getImageMimeType(imagePath);
+        const dataUri = `data:${mimeType};base64,${imageContent}`;
+        return `url(${dataUri})`;
+      } catch {
+        console.warn(`[markdown-pdf-plus] Could not read CSS resource: ${imagePath}`);
+        return match;
+      }
     }
     return match;
   });
@@ -293,19 +345,14 @@ const isExternalReference = (reference: string): boolean => {
   return /^(https?:)?\/\//i.test(reference);
 };
 
-/**
- * Injects page style into the HTML content.
- * @param htmlContent The HTML content to inject the page style into.
- * @returns The HTML content with the injected page style.
- */
 const injectPageStyle = async (htmlContent: string): Promise<string> => {
   const config: vscode.WorkspaceConfiguration = vscode.workspace.getConfiguration("markdown-pdf-plus");
 
-  const marginTop = config.get("marginTop", "70px");
-  const marginBottom = config.get("marginBottom", "70px");
-  const marginLeft = config.get("marginLeft", "70px");
-  const marginRight = config.get("marginRight", "70px");
-  const pageSize = config.get("pageSize", "a4");
+  const marginTop = validateCssLength(config.get("marginTop", "70px"), "70px");
+  const marginBottom = validateCssLength(config.get("marginBottom", "70px"), "70px");
+  const marginLeft = validateCssLength(config.get("marginLeft", "70px"), "70px");
+  const marginRight = validateCssLength(config.get("marginRight", "70px"), "70px");
+  const pageSize = validatePageSize(config.get("pageSize", "a4"), "a4");
 
   let styleContent = "@page {";
 
@@ -318,9 +365,60 @@ const injectPageStyle = async (htmlContent: string): Promise<string> => {
   styleContent += " }";
 
   const $ = load(htmlContent);
-  $("head").append(`<style>${styleContent}</style>`);
+  $("head").append(`<style>${sanitizeCssForStyleTag(styleContent)}</style>`);
 
   return $.html();
+};
+
+/**
+ * Resolves the Chromium executable path.
+ * Priority: user-configured chromiumPath (machine-scope) → PCR auto-detection.
+ */
+const resolveChromiumPath = async (
+  config: vscode.WorkspaceConfiguration
+): Promise<string> => {
+  const userPath = config.get("chromiumPath", "");
+  if (userPath && fs.existsSync(userPath)) {
+    return userPath;
+  }
+  if (userPath) {
+    console.warn(
+      `[markdown-pdf-plus] chromiumPath not found: ${userPath}, falling back to auto-detection`
+    );
+  }
+  try {
+    const stats = await PCR({});
+    return stats.executablePath;
+  } catch {
+    throw new Error(
+      "Could not find Chromium. Install Chrome/Chromium or set markdown-pdf-plus.chromiumPath in user settings."
+    );
+  }
+};
+
+/**
+ * Launches Puppeteer with configurable sandbox mode.
+ * - "auto": try sandboxed first, fallback to unsandboxed
+ * - "on": always sandboxed (may fail without SUID helpers)
+ * - "off": always unsandboxed (--no-sandbox)
+ */
+const launchBrowser = async (
+  executablePath: string,
+  sandboxMode: string
+): Promise<Browser> => {
+  if (sandboxMode === "off") {
+    return puppeteer.launch({ args: ["--no-sandbox"], executablePath });
+  }
+  if (sandboxMode === "on") {
+    return puppeteer.launch({ args: [], executablePath });
+  }
+  // auto: try sandboxed, fallback to unsandboxed
+  try {
+    return await puppeteer.launch({ args: [], executablePath });
+  } catch {
+    console.warn("[markdown-pdf-plus] Sandboxed launch failed, retrying without sandbox");
+    return puppeteer.launch({ args: ["--no-sandbox"], executablePath });
+  }
 };
 
 export default exportPdf;
