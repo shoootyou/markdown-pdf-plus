@@ -11,6 +11,7 @@ import {
   buildCspContent,
   sanitizeFilename,
 } from "../util/security";
+import { log, logError } from "../util/logger";
 
 /**
  * Exports the current Markdown document to HTML.
@@ -91,9 +92,10 @@ const exportHtml = async (isCalledFromExportPdf = false): Promise<[string, strin
     }
 
     await fs.writeFile(htmlFilePath, htmlContent, "utf-8");
+    log(`HTML export complete: ${path.basename(htmlFilePath)}`);
   } catch (error) {
     vscode.window.showErrorMessage(UIMessages.exportToHtmlFailed);
-    console.error("Error modifying HTML content:", error);
+    logError("Error modifying HTML content", error);
     return ["", ""];
   }
 

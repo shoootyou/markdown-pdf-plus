@@ -111,6 +111,12 @@
           "enum": ["none", "minimal", "bordered", "striped"],
           "default": "bordered",
           "markdownDescription": "Table styling preset for PDF output. **none**: page-break handling only, **minimal**: light bottom borders, **bordered**: full grid borders, **striped**: bordered with alternating row colors."
+        },
+        "markdown-pdf-plus.pdfTimeout": {
+          "type": "number",
+          "default": 60,
+          "minimum": 5,
+          "markdownDescription": "Maximum time in seconds to wait for PDF generation to complete. Increase for complex documents with many images or Mermaid diagrams."
         }
       }
     }

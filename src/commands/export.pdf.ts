@@ -18,58 +18,72 @@ import {
   isPathWithinBoundary,
 } from "../util/security";
 import { getTableCss } from "../util/tableStyles";
+import { log, logError } from "../util/logger";
 
 let conditionalUIMessage = "";
 
 const exportPdf = async (): Promise<boolean> => {
-  const config = vscode.workspace.getConfiguration("markdown-pdf-plus");
-  const [inputMarkdownFilename, inputHtmlFilename] = await exportHtml(true);
+  return vscode.window.withProgress(
+    {
+      location: vscode.ProgressLocation.Notification,
+      title: "Markdown PDF Plus",
+      cancellable: false,
+    },
+    async (progress) => {
+      progress.report({ message: "Exporting to HTML…" });
+      const config = vscode.workspace.getConfiguration("markdown-pdf-plus");
+      const [inputMarkdownFilename, inputHtmlFilename] = await exportHtml(true);
 
-  if (!inputHtmlFilename) {
-    return false;
-  }
+      if (!inputHtmlFilename) {
+        return false;
+      }
 
-  const editor = vscode.window.activeTextEditor;
-  if (!editor || !isMdDocument(editor?.document)) {
-    vscode.window.showErrorMessage(UIMessages.noValidMarkdownFile);
-    return false;
-  }
-  const doc = editor.document;
+      const editor = vscode.window.activeTextEditor;
+      if (!editor || !isMdDocument(editor?.document)) {
+        vscode.window.showErrorMessage(UIMessages.noValidMarkdownFile);
+        return false;
+      }
+      const doc = editor.document;
 
-  let inputHtmlHome = path.parse(doc.fileName).dir;
-  if (!inputHtmlHome) {
-    if (!vscode.window.activeTextEditor) {
-      await fsAsync.unlink(inputHtmlFilename).catch(() => {});
-      vscode.window.showErrorMessage(UIMessages.exportToPdfFailed);
-      return false;
-    }
-    inputHtmlHome = path.parse(vscode.window.activeTextEditor.document.fileName).dir;
-  }
+      let inputHtmlHome = path.parse(doc.fileName).dir;
+      if (!inputHtmlHome) {
+        if (!vscode.window.activeTextEditor) {
+          await fsAsync.unlink(inputHtmlFilename).catch(() => {});
+          vscode.window.showErrorMessage(UIMessages.exportToPdfFailed);
+          return false;
+        }
+        inputHtmlHome = path.parse(vscode.window.activeTextEditor.document.fileName).dir;
+      }
 
-  const inputHtmlPath = path.join(inputHtmlHome, inputHtmlFilename);
+      const inputHtmlPath = path.join(inputHtmlHome, inputHtmlFilename);
 
-  let outputPdfHome = config.get<string>("outputHome", "");
-  if (!outputPdfHome) {
-    if (!vscode.window.activeTextEditor) {
+      let outputPdfHome = config.get<string>("outputHome", "");
+      if (!outputPdfHome) {
+        if (!vscode.window.activeTextEditor) {
+          await fsAsync.unlink(inputHtmlPath).catch(() => {});
+          vscode.window.showErrorMessage(UIMessages.exportToPdfFailed);
+          return false;
+        }
+        outputPdfHome = path.parse(vscode.window.activeTextEditor.document.fileName).dir;
+      }
+
+      const outputPdfFilename = `${config.get<string>("outputFilename", "") || inputMarkdownFilename}.pdf`;
+      const outputPdfPath = path.join(outputPdfHome, outputPdfFilename);
+
+      progress.report({ message: "Generating PDF…" });
+      log(`Converting ${path.basename(inputHtmlPath)} → ${path.basename(outputPdfPath)}`);
+
+      const success = await convertHtmlToPdf(inputHtmlPath, outputPdfPath);
       await fsAsync.unlink(inputHtmlPath).catch(() => {});
-      vscode.window.showErrorMessage(UIMessages.exportToPdfFailed);
-      return false;
+
+      if (success) {
+        vscode.window.showInformationMessage(conditionalUIMessage);
+      } else {
+        vscode.window.showErrorMessage(UIMessages.exportToPdfFailed);
+      }
+      return success;
     }
-    outputPdfHome = path.parse(vscode.window.activeTextEditor.document.fileName).dir;
-  }
-
-  const outputPdfFilename = `${config.get<string>("outputFilename", "") || inputMarkdownFilename}.pdf`;
-  const outputPdfPath = path.join(outputPdfHome, outputPdfFilename);
-
-  const success = await convertHtmlToPdf(inputHtmlPath, outputPdfPath);
-  await fsAsync.unlink(inputHtmlPath).catch(() => {});
-
-  if (success) {
-    vscode.window.showInformationMessage(conditionalUIMessage);
-  } else {
-    vscode.window.showErrorMessage(UIMessages.exportToPdfFailed);
-  }
-  return success;
+  );
 };
 
 const convertHtmlToPdf = async (htmlFilePath: string, pdfFilePath: string): Promise<boolean> => {
@@ -78,14 +92,17 @@ const convertHtmlToPdf = async (htmlFilePath: string, pdfFilePath: string): Prom
     `${crypto.randomBytes(20).toString("hex")}.html`
   );
 
+  let browser: Browser | undefined;
   try {
     const config = vscode.workspace.getConfiguration("markdown-pdf-plus");
+    const pdfTimeout = Math.max(config.get<number>("pdfTimeout", 60) * 1000, 5000);
 
     const preferCSSPageSize = config.get<boolean>("usePageStyleFromCSS", false);
     const executablePath = await resolveChromiumPath(config);
     const sandboxMode = config.get<string>("puppeteerSandbox", "auto") || "auto";
-    const browser = await launchBrowser(executablePath, sandboxMode);
+    browser = await launchBrowser(executablePath, sandboxMode);
     const page = await browser.newPage();
+    page.setDefaultTimeout(pdfTimeout);
 
     await page.emulateMediaType("screen");
 
@@ -132,15 +149,15 @@ const convertHtmlToPdf = async (htmlFilePath: string, pdfFilePath: string): Prom
     );
 
     if (hasMermaid) {
+      log("Waiting for Mermaid diagrams to render…");
       try {
         await page.waitForFunction(
           `Array.from(document.querySelectorAll("pre.mermaid")).every(el => el.querySelector("svg") !== null)`,
           { timeout: 15000 }
         );
       } catch {
-        console.warn(
-          "[markdown-pdf-plus] Mermaid render timeout — PDF may have incomplete diagrams"
-        );
+        logError("Mermaid render timeout — PDF may have incomplete diagrams");
+        vscode.window.showWarningMessage(UIMessages.mermaidRenderWarning);
       }
     }
 
@@ -153,12 +170,35 @@ const convertHtmlToPdf = async (htmlFilePath: string, pdfFilePath: string): Prom
       preferCSSPageSize: preferCSSPageSize,
     });
 
+    log(`PDF generated: ${pdfFilePath}`);
     await browser.close();
+    browser = undefined;
     return true;
   } catch (error) {
-    console.error("Error converting HTML to PDF:", error);
+    logError("PDF conversion failed", error);
+    if (error instanceof Error) {
+      if (error.message.includes("ENOENT") || error.message.includes("executable")) {
+        vscode.window.showErrorMessage(UIMessages.chromiumNotFound, "Open Settings").then(
+          (action) => {
+            if (action === "Open Settings") {
+              void vscode.commands.executeCommand(
+                "workbench.action.openSettings",
+                "markdown-pdf-plus.chromiumPath"
+              );
+            }
+          }
+        );
+      } else if (error.message.includes("timeout") || error.message.includes("Timeout")) {
+        vscode.window.showErrorMessage(UIMessages.pdfTimeout);
+      } else if (error.message.includes("EACCES") || error.message.includes("permission")) {
+        vscode.window.showErrorMessage(UIMessages.fileWriteFailed);
+      }
+    }
     return false;
   } finally {
+    if (browser) {
+      await browser.close().catch(() => {});
+    }
     try {
       await fsAsync.unlink(tempHtmlFilePath);
     } catch {
@@ -362,15 +402,15 @@ const resolveChromiumPath = async (
   if (userPath) {
     try {
       await fsAsync.access(userPath);
+      log(`Using user-configured Chromium: ${userPath}`);
       return userPath;
     } catch {
-      console.warn(
-        `[markdown-pdf-plus] chromiumPath not found: ${userPath}, falling back to auto-detection`
-      );
+      logError(`chromiumPath not found: ${userPath}, falling back to auto-detection`);
     }
   }
   try {
     const stats = await PCR({});
+    log(`Using auto-detected Chromium: ${stats.executablePath}`);
     return stats.executablePath;
   } catch {
     throw new Error(
