@@ -52,8 +52,8 @@ const exportHtml = async (isCalledFromExportPdf = false): Promise<[string, strin
 
     // Modify the HTML content to render Mermaid diagrams as SVGs
     const mermaidScript = `
-    <script type="module">
-      import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+    <script>
       mermaid.initialize({ startOnLoad: true });
     </script>`;
 
@@ -67,7 +67,10 @@ const exportHtml = async (isCalledFromExportPdf = false): Promise<[string, strin
       htmlContent += mermaidScript;
     }
 
-    // convert mermaid blocks
+    // Remove conflicting Mermaid scripts injected by bierner.markdown-mermaid
+    htmlContent = stripExternalMermaidScripts(htmlContent);
+
+    // Decode HTML entities inside Mermaid blocks so the parser receives clean text
     htmlContent = convertMermaidBlocks(htmlContent);
 
     // Add the extension-setting CSS to the HTML content
@@ -169,12 +172,40 @@ const printToHtml = async (): Promise<boolean> => {
 };
 
 const convertMermaidBlocks = (html: string): string => {
-  return html.replace(
+  // Match both patterns:
+  //   <pre><code class="language-mermaid">…</code></pre>  (raw markdown-it output)
+  //   <pre class="mermaid" …>…</pre>                      (bierner.markdown-mermaid output)
+  html = html.replace(
     /<pre><code class="language-mermaid">([\s\S]*?)<\/code><\/pre>/g,
-    (match, p1) => {
-      return `<pre class="mermaid">${p1}</pre>`;
-    }
+    (_, content) => `<pre class="mermaid">${decodeMermaidEntities(content)}</pre>`
   );
+  html = html.replace(
+    /<pre class="mermaid"[^>]*>([\s\S]*?)<\/pre>/g,
+    (_, content) => `<pre class="mermaid">${decodeMermaidEntities(content)}</pre>`
+  );
+  return html;
+};
+
+const decodeMermaidEntities = (text: string): string => {
+  // Decode only entities that break Mermaid parsing.
+  // Keep &lt; so <br/> stays as text (Mermaid line-break directive).
+  // Keep &amp; to avoid bare ampersand issues in HTML.
+  return text
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&#x27;/g, "'");
+};
+
+const stripExternalMermaidScripts = (html: string): string => {
+  // Remove bierner.markdown-mermaid config span
+  html = html.replace(/<span id="markdown-mermaid"[^>]*><\/span>/g, "");
+  // Remove bierner.markdown-mermaid inline script bundle
+  html = html.replace(
+    /\/\* From extension bierner\.markdown-mermaid \*\/[\s\S]*?<\/script>/g,
+    "</script>"
+  );
+  return html;
 };
 
 export default exportHtml;
