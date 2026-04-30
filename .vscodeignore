@@ -1,10 +1,49 @@
+# Source & config
+src/**
 .vscode/**
 .vscode-test/**
-src/**
 .gitignore
 .yarnrc
+.prettierrc
+.eslintrc*
 vsc-extension-quickstart.md
 **/tsconfig.json
 **/.eslintrc.json
+esbuild.mjs
+
+# Build artifacts we don't ship
 **/*.map
 **/*.ts
+out/test/**
+
+# Docs & metadata in dependencies
+docs/**
+node_modules/**/*.md
+node_modules/**/*.markdown
+node_modules/**/README*
+node_modules/**/CHANGELOG*
+node_modules/**/HISTORY*
+node_modules/**/AUTHORS*
+node_modules/**/CONTRIBUTORS*
+node_modules/**/LICENSE*
+node_modules/**/LICENCE*
+node_modules/**/COPYING*
+node_modules/**/NOTICE*
+node_modules/**/.github/**
+
+# ESM/browser/IIFE builds (extension runs in Node CJS)
+node_modules/**/esm/**
+node_modules/**/browser/**
+node_modules/**/iife/**
+node_modules/**/*.mjs
+node_modules/**/*.mts
+node_modules/**/*.browser.js
+
+# Heavy data files not needed at runtime
+node_modules/devtools-protocol/json/**
+node_modules/devtools-protocol/pdl/**
+
+# Unnecessary public assets
+public/recording_export_pdf.gif
+public/icon.png
+public/icon_white_background.png
