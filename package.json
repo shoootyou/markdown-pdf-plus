@@ -105,6 +105,12 @@
           "type": "boolean",
           "default": true,
           "markdownDescription": "Allow embedding images and stylesheets from outside the workspace folder during export. Disable when working with untrusted content to prevent local file reads."
+        },
+        "markdown-pdf-plus.tableStyle": {
+          "type": "string",
+          "enum": ["none", "minimal", "bordered", "striped"],
+          "default": "bordered",
+          "markdownDescription": "Table styling preset for PDF output. **none**: page-break handling only, **minimal**: light bottom borders, **bordered**: full grid borders, **striped**: bordered with alternating row colors."
         }
       }
     }

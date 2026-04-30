@@ -17,6 +17,7 @@ import {
   validatePageSize,
   isPathWithinBoundary,
 } from "../util/security";
+import { getTableCss } from "../util/tableStyles";
 
 let conditionalUIMessage = "";
 
@@ -110,6 +111,7 @@ const convertHtmlToPdf = async (htmlFilePath: string, pdfFilePath: string): Prom
     replaceLocalImgSrcWithBase64($, allowExternalResources, workspaceBoundary);
     await replaceLocalBackgroundImagesWithBase64($, htmlFilePath, allowExternalResources, workspaceBoundary);
     injectPageStyle($);
+    injectTableStyle($, config);
 
     let htmlContent = $.html();
 
@@ -338,6 +340,15 @@ const injectPageStyle = ($: CheerioAPI): void => {
   styleContent += " }";
 
   $("head").append(`<style>${sanitizeCssForStyleTag(styleContent)}</style>`);
+};
+
+/**
+ * Injects table styling CSS based on user preset (mutates cheerio instance).
+ */
+const injectTableStyle = ($: CheerioAPI, config: vscode.WorkspaceConfiguration): void => {
+  const preset = config.get<string>("tableStyle", "bordered");
+  const tableCss = getTableCss(preset);
+  $("head").append(`<style>${sanitizeCssForStyleTag(tableCss)}</style>`);
 };
 
 /**
