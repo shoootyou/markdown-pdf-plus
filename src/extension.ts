@@ -1,21 +1,18 @@
 import * as vscode from "vscode";
-import * as fs from "fs";
-import * as path from "path";
 
-const manifest = fs.readFileSync(path.resolve(__dirname, "../package.json"), "utf8");
-const meta: { name: string; contributes: { commands: Array<{ command: string; title: string }> } } =
-  JSON.parse(manifest);
+import exportHtml from "./commands/export.html";
+import exportPdf from "./commands/export.pdf";
 
-const activate = async (context: vscode.ExtensionContext): Promise<vscode.ExtensionContext> => {
-  const disposables = await Promise.all(
-    meta.contributes.commands.map(async (commandObj) => {
-      const commandFunction = await import(
-        `./commands/${commandObj.command.split(`${meta.name}.`)[1]}`
-      );
-      return vscode.commands.registerCommand(commandObj.command, commandFunction.default);
-    })
-  );
-  context.subscriptions.push(...disposables);
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const commandMap: Record<string, (...args: any[]) => any> = {
+  "markdown-pdf-plus.export.html": exportHtml,
+  "markdown-pdf-plus.export.pdf": exportPdf,
+};
+
+const activate = (context: vscode.ExtensionContext): vscode.ExtensionContext => {
+  for (const [commandId, handler] of Object.entries(commandMap)) {
+    context.subscriptions.push(vscode.commands.registerCommand(commandId, handler));
+  }
   return context;
 };
 
