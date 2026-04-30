@@ -21,11 +21,11 @@ Export Markdown as PDF or HTML — with custom CSS, Mermaid diagrams, table styl
 
 ---
 
-## Requirements
+## Getting Started
 
-- **VS Code 1.85** or later
-- **[Markdown All in One](https://marketplace.visualstudio.com/items?itemName=yzhang.markdown-all-in-one)** extension — installed automatically as a dependency
-- **Chromium** — downloaded automatically on first use via `puppeteer-chromium-resolver`; no manual setup needed
+No setup required. Install the extension, open any Markdown file, and run one of the export commands from the Command Palette. Chromium is downloaded automatically on first use.
+
+> **Note:** This extension depends on [Markdown All in One](https://marketplace.visualstudio.com/items?itemName=yzhang.markdown-all-in-one), which is installed automatically.
 
 ---
 
