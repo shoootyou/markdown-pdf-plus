@@ -1,6 +1,6 @@
 {
   "name": "markdown-pdf-plus",
-  "version": "1.2.0",
+  "version": "2026.4.30",
   "publisher": "tom-latham",
   "engines": {
     "vscode": "^1.85.0"
@@ -96,7 +96,11 @@
         },
         "markdown-pdf-plus.puppeteerSandbox": {
           "type": "string",
-          "enum": ["auto", "on", "off"],
+          "enum": [
+            "auto",
+            "on",
+            "off"
+          ],
           "default": "auto",
           "scope": "machine",
           "markdownDescription": "Chromium sandbox mode for PDF rendering.\n\n- `auto` (default): Tries sandboxed first, falls back to unsandboxed.\n- `on`: Always sandboxed (may fail on some Linux systems).\n- `off`: Always runs without sandbox (`--no-sandbox`)."
@@ -108,7 +112,12 @@
         },
         "markdown-pdf-plus.tableStyle": {
           "type": "string",
-          "enum": ["none", "minimal", "bordered", "striped"],
+          "enum": [
+            "none",
+            "minimal",
+            "bordered",
+            "striped"
+          ],
           "default": "bordered",
           "markdownDescription": "Table styling preset for PDF output. **none**: page-break handling only, **minimal**: light bottom borders, **bordered**: full grid borders, **striped**: bordered with alternating row colors."
         },
