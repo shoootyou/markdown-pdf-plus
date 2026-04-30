@@ -99,18 +99,34 @@ const convertHtmlToPdf = async (htmlFilePath: string, pdfFilePath: string): Prom
     // Emulate screen media type to remove default header and footer
     await page.emulateMediaType("screen");
 
-    const htmlContent = 
-      // 4. add page style to the html content
-      await injectPageStyle(
-        // 3. replace local background images (CSS) with base64
-        await replaceLocalBackgroundImagesWithBase64InMemory(
-          // 2. replace local images (HTML) with base64
-          replaceLocalImgSrcWithBase64(
-            // 1. read the HTML content
-            await fs.promises.readFile(htmlFilePath, "utf8")),
-          htmlFilePath
-        )
-      );
+    // 1. read the HTML content
+    let rawHtml = await fs.promises.readFile(htmlFilePath, "utf8");
+
+    // Protect Mermaid blocks from cheerio serialization corruption.
+    // Extract them before cheerio touches the HTML, re-inject after.
+    const mermaidBlocks: string[] = [];
+    rawHtml = rawHtml.replace(
+      /<pre class="mermaid">([\s\S]*?)<\/pre>/g,
+      (match) => {
+        const idx = mermaidBlocks.length;
+        mermaidBlocks.push(match);
+        return `<!-- __MERMAID_PLACEHOLDER_${idx}__ -->`;
+      }
+    );
+
+    // 2–4: cheerio-based transforms (now safe — Mermaid blocks are placeholders)
+    let htmlContent = await injectPageStyle(
+      await replaceLocalBackgroundImagesWithBase64InMemory(
+        replaceLocalImgSrcWithBase64(rawHtml),
+        htmlFilePath
+      )
+    );
+
+    // Restore Mermaid blocks
+    htmlContent = htmlContent.replace(
+      /<!-- __MERMAID_PLACEHOLDER_(\d+)__ -->/g,
+      (_, idx) => mermaidBlocks[parseInt(idx)]
+    );
 
     // Write the modified HTML content to a temporary file
     fs.writeFileSync(tempHtmlFilePath, htmlContent, "utf8");
@@ -118,6 +134,27 @@ const convertHtmlToPdf = async (htmlFilePath: string, pdfFilePath: string): Prom
     // Set content of the page to the temporary HTML file
     await page.goto(`file://${tempHtmlFilePath}`, { waitUntil: "networkidle0" });
     await addExternalStylesheetsToPage(htmlFilePath, page);
+
+    // Wait for Mermaid diagrams to finish rendering (if any)
+    const hasMermaid = await page.evaluate(
+      () => document.querySelectorAll("pre.mermaid").length > 0
+    );
+
+    if (hasMermaid) {
+      try {
+        await page.waitForFunction(
+          () =>
+            Array.from(document.querySelectorAll("pre.mermaid")).every(
+              (el) => el.querySelector("svg") !== null
+            ),
+          { timeout: 15000 }
+        );
+      } catch {
+        console.warn(
+          "[markdown-pdf-plus] Mermaid render timeout — PDF may have incomplete diagrams"
+        );
+      }
+    }
 
     // Generate PDF without the header and footer
     await page.pdf({
