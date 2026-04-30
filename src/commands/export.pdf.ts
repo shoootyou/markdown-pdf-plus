@@ -1,10 +1,11 @@
 import * as vscode from "vscode";
+import { promises as fsAsync } from "fs";
 import * as fs from "fs";
-import path = require("path");
+import * as path from "path";
 import puppeteer, { Browser, Page } from "puppeteer";
-import { load } from "cheerio";
+import { load, type CheerioAPI } from "cheerio";
 import PCR from "puppeteer-chromium-resolver";
-import crypto = require("crypto");
+import * as crypto from "crypto";
 
 import UIMessages from "../constants/uiMessages";
 import exportHtml from "./export.html";
@@ -20,67 +21,54 @@ import {
 let conditionalUIMessage = "";
 
 const exportPdf = async (): Promise<boolean> => {
-  const config: vscode.WorkspaceConfiguration =
-    vscode.workspace.getConfiguration("markdown-pdf-plus");
+  const config = vscode.workspace.getConfiguration("markdown-pdf-plus");
   const [inputMarkdownFilename, inputHtmlFilename] = await exportHtml(true);
 
-  if (inputHtmlFilename) {
-    const editor = vscode.window.activeTextEditor;
+  if (!inputHtmlFilename) {
+    return false;
+  }
 
-    if (!editor || !isMdDocument(editor?.document)) {
-      vscode.window.showErrorMessage(UIMessages.noValidMarkdownFile);
-      return false;
-    }
-    const doc: vscode.TextDocument = editor.document;
+  const editor = vscode.window.activeTextEditor;
+  if (!editor || !isMdDocument(editor?.document)) {
+    vscode.window.showErrorMessage(UIMessages.noValidMarkdownFile);
+    return false;
+  }
+  const doc = editor.document;
 
-    let inputHtmlHome = path.parse(doc.fileName).dir;
-    if (!inputHtmlHome) {
-      if (!vscode.window.activeTextEditor) {
-        fs.unlink(inputHtmlFilename, () => {
-          console.log("Temporary HTML file deleted.");
-        });
-        vscode.window.showErrorMessage(UIMessages.exportToPdfFailed);
-        return false;
-      } else {
-        inputHtmlHome = path.parse(vscode.window.activeTextEditor.document.fileName).dir;
-      }
-    }
-
-    const inputHtmlPath = path.join(inputHtmlHome, inputHtmlFilename);
-
-    let outputPdfHome = config.get("outputHome", "");
-    if (!outputPdfHome) {
-      if (!vscode.window.activeTextEditor) {
-        fs.unlink(inputHtmlPath, () => {
-          console.log("Temporary HTML file deleted.");
-        });
-        vscode.window.showErrorMessage(UIMessages.exportToPdfFailed);
-        return false;
-      } else {
-        outputPdfHome = path.parse(vscode.window.activeTextEditor.document.fileName).dir;
-      }
-    }
-    const outputPdfFilename = `${config.get("outputFilename", "") || inputMarkdownFilename}.pdf`;
-
-    const outputPdfPath = path.join(outputPdfHome, outputPdfFilename);
-
-    if (await convertHtmlToPdf(inputHtmlPath, outputPdfPath)) {
-      fs.unlink(inputHtmlPath, () => {
-        console.log("Temporary HTML file deleted.");
-      });
-
-      vscode.window.showInformationMessage(conditionalUIMessage);
-      return true;
-    } else {
-      fs.unlink(inputHtmlPath, () => {
-        console.log("Temporary HTML file deleted.");
-      });
+  let inputHtmlHome = path.parse(doc.fileName).dir;
+  if (!inputHtmlHome) {
+    if (!vscode.window.activeTextEditor) {
+      await fsAsync.unlink(inputHtmlFilename).catch(() => {});
       vscode.window.showErrorMessage(UIMessages.exportToPdfFailed);
       return false;
     }
-  } else {
-    return false;
+    inputHtmlHome = path.parse(vscode.window.activeTextEditor.document.fileName).dir;
   }
+
+  const inputHtmlPath = path.join(inputHtmlHome, inputHtmlFilename);
+
+  let outputPdfHome = config.get<string>("outputHome", "");
+  if (!outputPdfHome) {
+    if (!vscode.window.activeTextEditor) {
+      await fsAsync.unlink(inputHtmlPath).catch(() => {});
+      vscode.window.showErrorMessage(UIMessages.exportToPdfFailed);
+      return false;
+    }
+    outputPdfHome = path.parse(vscode.window.activeTextEditor.document.fileName).dir;
+  }
+
+  const outputPdfFilename = `${config.get<string>("outputFilename", "") || inputMarkdownFilename}.pdf`;
+  const outputPdfPath = path.join(outputPdfHome, outputPdfFilename);
+
+  const success = await convertHtmlToPdf(inputHtmlPath, outputPdfPath);
+  await fsAsync.unlink(inputHtmlPath).catch(() => {});
+
+  if (success) {
+    vscode.window.showInformationMessage(conditionalUIMessage);
+  } else {
+    vscode.window.showErrorMessage(UIMessages.exportToPdfFailed);
+  }
+  return success;
 };
 
 const convertHtmlToPdf = async (htmlFilePath: string, pdfFilePath: string): Promise<boolean> => {
@@ -90,23 +78,19 @@ const convertHtmlToPdf = async (htmlFilePath: string, pdfFilePath: string): Prom
   );
 
   try {
-    const config: vscode.WorkspaceConfiguration =
-      vscode.workspace.getConfiguration("markdown-pdf-plus");
+    const config = vscode.workspace.getConfiguration("markdown-pdf-plus");
 
-    const preferCSSPageSize: boolean = config.get("usePageStyleFromCSS", false);
+    const preferCSSPageSize = config.get<boolean>("usePageStyleFromCSS", false);
     const executablePath = await resolveChromiumPath(config);
-    const sandboxMode = (config.get("puppeteerSandbox", "auto") as string) || "auto";
+    const sandboxMode = config.get<string>("puppeteerSandbox", "auto") || "auto";
     const browser = await launchBrowser(executablePath, sandboxMode);
     const page = await browser.newPage();
 
-    // Emulate screen media type to remove default header and footer
     await page.emulateMediaType("screen");
 
-    // 1. read the HTML content
-    let rawHtml = await fs.promises.readFile(htmlFilePath, "utf8");
+    let rawHtml = await fsAsync.readFile(htmlFilePath, "utf8");
 
-    // Protect Mermaid blocks from cheerio serialization corruption.
-    // Extract them before cheerio touches the HTML, re-inject after.
+    // Protect Mermaid blocks from cheerio serialization corruption
     const mermaidBlocks: string[] = [];
     rawHtml = rawHtml.replace(
       /<pre class="mermaid">([\s\S]*?)<\/pre>/g,
@@ -117,20 +101,17 @@ const convertHtmlToPdf = async (htmlFilePath: string, pdfFilePath: string): Prom
       }
     );
 
-    // Security: resolve workspace boundary for file reads
-    const allowExternalResources: boolean = config.get("allowExternalResources", true);
+    const allowExternalResources = config.get<boolean>("allowExternalResources", true);
     const workspaceBoundary =
       vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || path.dirname(htmlFilePath);
 
-    // 2–4: cheerio-based transforms (now safe — Mermaid blocks are placeholders)
-    let htmlContent = await injectPageStyle(
-      await replaceLocalBackgroundImagesWithBase64InMemory(
-        replaceLocalImgSrcWithBase64(rawHtml, allowExternalResources, workspaceBoundary),
-        htmlFilePath,
-        allowExternalResources,
-        workspaceBoundary
-      )
-    );
+    // Single cheerio parse for all transforms
+    const $ = load(rawHtml);
+    replaceLocalImgSrcWithBase64($, allowExternalResources, workspaceBoundary);
+    await replaceLocalBackgroundImagesWithBase64($, htmlFilePath, allowExternalResources, workspaceBoundary);
+    injectPageStyle($);
+
+    let htmlContent = $.html();
 
     // Restore Mermaid blocks
     htmlContent = htmlContent.replace(
@@ -138,10 +119,8 @@ const convertHtmlToPdf = async (htmlFilePath: string, pdfFilePath: string): Prom
       (_, idx) => mermaidBlocks[parseInt(idx)]
     );
 
-    // Write the modified HTML content to a temporary file
-    fs.writeFileSync(tempHtmlFilePath, htmlContent, "utf8");
+    await fsAsync.writeFile(tempHtmlFilePath, htmlContent, "utf8");
 
-    // Set content of the page to the temporary HTML file
     await page.goto(`file://${tempHtmlFilePath}`, { waitUntil: "networkidle0" });
     await addExternalStylesheetsToPage(htmlFilePath, page, allowExternalResources, workspaceBoundary);
 
@@ -163,7 +142,6 @@ const convertHtmlToPdf = async (htmlFilePath: string, pdfFilePath: string): Prom
       }
     }
 
-    // Generate PDF without the header and footer
     await page.pdf({
       path: pdfFilePath,
       format: "A4",
@@ -174,14 +152,15 @@ const convertHtmlToPdf = async (htmlFilePath: string, pdfFilePath: string): Prom
     });
 
     await browser.close();
-    return true; // Conversion successful
+    return true;
   } catch (error) {
     console.error("Error converting HTML to PDF:", error);
-    return false; // Conversion failed
+    return false;
   } finally {
-    if (fs.existsSync(tempHtmlFilePath)) {
-      fs.unlinkSync(tempHtmlFilePath);
-      console.log("Temporary HTML file deleted.");
+    try {
+      await fsAsync.unlink(tempHtmlFilePath);
+    } catch {
+      // temp file already gone or never created
     }
   }
 };
@@ -192,7 +171,7 @@ const addExternalStylesheetsToPage = async (
   allowExternalResources: boolean,
   boundary: string
 ): Promise<void> => {
-  const fileContent = await fs.promises.readFile(htmlFilePath, "utf8");
+  const fileContent = await fsAsync.readFile(htmlFilePath, "utf8");
   const stylesheets = extractStylesheetsFromHtml(fileContent, htmlFilePath);
 
   conditionalUIMessage = UIMessages.exportToPdfSucceeded;
@@ -200,7 +179,7 @@ const addExternalStylesheetsToPage = async (
     if (stylesheet.isExternal) {
       try {
         await page.addStyleTag({ url: stylesheet.path });
-      } catch (error) {
+      } catch {
         conditionalUIMessage = UIMessages.exportToPdfSucceededExternalCssFailed;
       }
     } else {
@@ -208,7 +187,7 @@ const addExternalStylesheetsToPage = async (
         console.warn(`[markdown-pdf-plus] Skipping stylesheet outside workspace: ${stylesheet.path}`);
         continue;
       }
-      const stylesheetContent = await fs.promises.readFile(stylesheet.path, "utf8");
+      const stylesheetContent = await fsAsync.readFile(stylesheet.path, "utf8");
       await page.addStyleTag({ content: stylesheetContent });
     }
   }
@@ -218,12 +197,11 @@ const extractStylesheetsFromHtml = (
   htmlContent: string,
   htmlFilePath: string
 ): StylesheetInfo[] => {
-  const $ = load(htmlContent);
+  const $doc = load(htmlContent);
   const stylesheets: StylesheetInfo[] = [];
 
-  // eslint-disable-next-line quotes
-  $('link[rel="stylesheet"]').each((_, element) => {
-    const href = $(element).attr("href");
+  $doc('link[rel="stylesheet"]').each((_, element) => {
+    const href = $doc(element).attr("href");
     if (href) {
       const isExternal = isExternalReference(href);
       const stylesheetPath = isExternal ? href : path.resolve(path.dirname(htmlFilePath), href);
@@ -234,13 +212,14 @@ const extractStylesheetsFromHtml = (
   return stylesheets;
 };
 
+/**
+ * Replaces local image src attributes with base64 data URIs (mutates cheerio instance).
+ */
 const replaceLocalImgSrcWithBase64 = (
-  htmlContent: string,
+  $: CheerioAPI,
   allowExternalResources: boolean,
   boundary: string
-): string => {
-  const $ = load(htmlContent);
-
+): void => {
   $("img[src]").each((_, element) => {
     const src = $(element).attr("src");
     if (src && !isExternalReference(src)) {
@@ -252,35 +231,32 @@ const replaceLocalImgSrcWithBase64 = (
       try {
         const imageContent = fs.readFileSync(imagePath).toString("base64");
         const mimeType = getImageMimeType(imagePath);
-        const dataUri = `data:${mimeType};base64,${imageContent}`;
-        $(element).attr("src", dataUri);
+        $(element).attr("src", `data:${mimeType};base64,${imageContent}`);
       } catch {
         console.warn(`[markdown-pdf-plus] Could not read image: ${imagePath}`);
       }
     }
   });
-
-  return $.html();
 };
 
-const replaceLocalBackgroundImagesWithBase64InMemory = async (
-  htmlContent: string,
+/**
+ * Inlines background images from linked CSS files as base64 (mutates cheerio instance).
+ */
+const replaceLocalBackgroundImagesWithBase64 = async (
+  $: CheerioAPI,
   htmlFilePath: string,
   allowExternalResources: boolean,
   boundary: string
-): Promise<string> => {
-  const $ = load(htmlContent);
-
-  // Process each linked CSS file
-  const stylesheets = extractStylesheetsFromHtml(htmlContent, htmlFilePath);
+): Promise<void> => {
+  const stylesheets = extractStylesheetsFromHtml($.html(), htmlFilePath);
   for (const stylesheet of stylesheets) {
     if (!stylesheet.isExternal) {
       if (!allowExternalResources && !isPathWithinBoundary(stylesheet.path, boundary)) {
         console.warn(`[markdown-pdf-plus] Skipping CSS outside workspace: ${stylesheet.path}`);
         continue;
       }
-      const cssContent = await fs.promises.readFile(stylesheet.path, "utf8");
-      const updatedCssContent = await replaceLocalUrlsWithBase64(
+      const cssContent = await fsAsync.readFile(stylesheet.path, "utf8");
+      const updatedCssContent = replaceLocalUrlsWithBase64(
         cssContent,
         path.dirname(stylesheet.path),
         allowExternalResources,
@@ -290,16 +266,14 @@ const replaceLocalBackgroundImagesWithBase64InMemory = async (
       $("head").append(`<style>${sanitizeCssForStyleTag(updatedCssContent)}</style>`);
     }
   }
-
-  return $.html();
 };
 
-const replaceLocalUrlsWithBase64 = async (
+const replaceLocalUrlsWithBase64 = (
   cssContent: string,
   cssDir: string,
   allowExternalResources: boolean,
   boundary: string
-): Promise<string> => {
+): string => {
   return cssContent.replace(/url\(["']?(.*?)["']?\)/g, (match, url) => {
     if (!isExternalReference(url)) {
       const imagePath = path.resolve(cssDir, url);
@@ -310,8 +284,7 @@ const replaceLocalUrlsWithBase64 = async (
       try {
         const imageContent = fs.readFileSync(imagePath).toString("base64");
         const mimeType = getImageMimeType(imagePath);
-        const dataUri = `data:${mimeType};base64,${imageContent}`;
-        return `url(${dataUri})`;
+        return `url(data:${mimeType};base64,${imageContent})`;
       } catch {
         console.warn(`[markdown-pdf-plus] Could not read CSS resource: ${imagePath}`);
         return match;
@@ -333,8 +306,10 @@ const getImageMimeType = (imagePath: string): string => {
       return "image/gif";
     case ".svg":
       return "image/svg+xml";
+    case ".webp":
+      return "image/webp";
     default:
-      return "image/jpeg"; // Default to JPEG if the extension is unknown
+      return "image/jpeg";
   }
 };
 
@@ -342,8 +317,11 @@ const isExternalReference = (reference: string): boolean => {
   return /^(https?:)?\/\//i.test(reference);
 };
 
-const injectPageStyle = async (htmlContent: string): Promise<string> => {
-  const config: vscode.WorkspaceConfiguration = vscode.workspace.getConfiguration("markdown-pdf-plus");
+/**
+ * Injects @page CSS with margins and page size (mutates cheerio instance).
+ */
+const injectPageStyle = ($: CheerioAPI): void => {
+  const config = vscode.workspace.getConfiguration("markdown-pdf-plus");
 
   const marginTop = validateCssLength(config.get("marginTop", "70px"), "70px");
   const marginBottom = validateCssLength(config.get("marginBottom", "70px"), "70px");
@@ -352,19 +330,14 @@ const injectPageStyle = async (htmlContent: string): Promise<string> => {
   const pageSize = validatePageSize(config.get("pageSize", "a4"), "a4");
 
   let styleContent = "@page {";
-
   if (marginTop) styleContent += ` margin-top: ${marginTop};`;
   if (marginBottom) styleContent += ` margin-bottom: ${marginBottom};`;
   if (marginLeft) styleContent += ` margin-left: ${marginLeft};`;
   if (marginRight) styleContent += ` margin-right: ${marginRight};`;
   if (pageSize) styleContent += ` size: ${pageSize};`;
-
   styleContent += " }";
 
-  const $ = load(htmlContent);
   $("head").append(`<style>${sanitizeCssForStyleTag(styleContent)}</style>`);
-
-  return $.html();
 };
 
 /**
@@ -374,14 +347,16 @@ const injectPageStyle = async (htmlContent: string): Promise<string> => {
 const resolveChromiumPath = async (
   config: vscode.WorkspaceConfiguration
 ): Promise<string> => {
-  const userPath = config.get("chromiumPath", "");
-  if (userPath && fs.existsSync(userPath)) {
-    return userPath;
-  }
+  const userPath = config.get<string>("chromiumPath", "");
   if (userPath) {
-    console.warn(
-      `[markdown-pdf-plus] chromiumPath not found: ${userPath}, falling back to auto-detection`
-    );
+    try {
+      await fsAsync.access(userPath);
+      return userPath;
+    } catch {
+      console.warn(
+        `[markdown-pdf-plus] chromiumPath not found: ${userPath}, falling back to auto-detection`
+      );
+    }
   }
   try {
     const stats = await PCR({});

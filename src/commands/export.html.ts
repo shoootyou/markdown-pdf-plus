@@ -1,11 +1,10 @@
 import * as vscode from "vscode";
-import * as fs from "fs";
-import path = require("path");
-import crypto = require("crypto");
+import { promises as fs } from "fs";
+import * as path from "path";
+import * as crypto from "crypto";
 
 import UIMessages from "../constants/uiMessages";
-import { isMdDocument, convertFileExtension } from "../util/general";
-import { checkFileExists } from "../test/util/general";
+import { isMdDocument, convertFileExtension, checkFileExists } from "../util/general";
 import {
   sanitizeCssForStyleTag,
   generateNonce,
@@ -14,28 +13,23 @@ import {
 } from "../util/security";
 
 /**
- * Exports the current Markdown document (whether by current editor or configured path) to HTML.
+ * Exports the current Markdown document to HTML.
  *
- * @param isCalledFromExportPdf True if the function was called from `exportPdf()`
- *  in`src/commands/export.pdf.ts`.
- * @returns A 2-element `string` array. If unsuccessful, both strings will be the empty string.
- *  If successful, the first string will be the name of the original input file, and second string
- *  will be the name of the created HTML file.
+ * @param isCalledFromExportPdf True if called from `exportPdf()`.
+ * @returns A 2-element string array: [inputName, outputName] or ["",""] on failure.
  */
 const exportHtml = async (isCalledFromExportPdf = false): Promise<[string, string]> => {
-  const config: vscode.WorkspaceConfiguration =
-    vscode.workspace.getConfiguration("markdown-pdf-plus");
-
+  const config = vscode.workspace.getConfiguration("markdown-pdf-plus");
   const editor = vscode.window.activeTextEditor;
 
   if (!editor || !isMdDocument(editor?.document)) {
     vscode.window.showErrorMessage(UIMessages.noValidMarkdownFile);
     return ["", ""];
   }
-  const doc: vscode.TextDocument = editor.document;
+  const doc = editor.document;
 
   if (doc.isDirty || doc.isUntitled) {
-    doc.save();
+    await doc.save();
   }
 
   if (!(await printToHtml())) {
@@ -43,20 +37,17 @@ const exportHtml = async (isCalledFromExportPdf = false): Promise<[string, strin
     return ["", ""];
   }
 
-  if (
-    !(await checkFileExists(convertFileExtension(doc.fileName, ".md", ".html"), 6000)) &&
-    isCalledFromExportPdf
-  ) {
+  const htmlFilePath = convertFileExtension(doc.fileName, ".md", ".html");
+
+  if (!(await checkFileExists(htmlFilePath, 6000)) && isCalledFromExportPdf) {
     vscode.window.showErrorMessage(UIMessages.exportToPdfFailed);
     return ["", ""];
   }
 
   try {
-    // Read the generated HTML file
-    const htmlFilePath = convertFileExtension(doc.fileName, ".md", ".html");
-    let htmlContent = fs.readFileSync(htmlFilePath, "utf-8");
+    let htmlContent = await fs.readFile(htmlFilePath, "utf-8");
 
-    // Security: generate nonce for CSP and inject CSP meta tag
+    // Inject CSP meta tag with nonce
     const nonce = generateNonce();
     const cspMeta = `<meta http-equiv="Content-Security-Policy" content="${buildCspContent(nonce)}">`;
     const headIndex = htmlContent.indexOf("<head>");
@@ -65,45 +56,41 @@ const exportHtml = async (isCalledFromExportPdf = false): Promise<[string, strin
         htmlContent.slice(0, headIndex + 6) + "\n" + cspMeta + htmlContent.slice(headIndex + 6);
     }
 
-    // Modify the HTML content to render Mermaid diagrams as SVGs
+    // Inject Mermaid scripts with nonce
     const mermaidScript = `
     <script nonce="${nonce}" src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
     <script nonce="${nonce}">
       mermaid.initialize({ startOnLoad: true });
     </script>`;
 
-    // Insert the Mermaid script after the first instance of </style>
     const styleIndex = htmlContent.indexOf("</style>");
     if (styleIndex !== -1) {
       htmlContent =
         htmlContent.slice(0, styleIndex + 8) + mermaidScript + htmlContent.slice(styleIndex + 8);
     } else {
-      // If no </style> tag is found, append the script at the end of the HTML
       htmlContent += mermaidScript;
     }
 
-    // Remove conflicting Mermaid scripts injected by bierner.markdown-mermaid
     htmlContent = stripExternalMermaidScripts(htmlContent);
-
-    // Decode HTML entities inside Mermaid blocks so the parser receives clean text
     htmlContent = convertMermaidBlocks(htmlContent);
 
-    // Add the extension-setting CSS to the HTML content
-    const stylesheetPathFromExtensionSettings = config.get("CSSPath", "");
-    if (stylesheetPathFromExtensionSettings && fs.existsSync(stylesheetPathFromExtensionSettings)) {
-      const stylesheetContent = fs.readFileSync(stylesheetPathFromExtensionSettings, "utf-8");
-      const styleTag = `<style>${sanitizeCssForStyleTag(stylesheetContent)}</style>`;
-      htmlContent += styleTag;
+    // Append user CSS (extension settings)
+    const cssPath = config.get<string>("CSSPath", "");
+    if (cssPath) {
+      try {
+        const stylesheetContent = await fs.readFile(cssPath, "utf-8");
+        htmlContent += `<style>${sanitizeCssForStyleTag(stylesheetContent)}</style>`;
+      } catch {
+        console.warn(`[markdown-pdf-plus] Could not read CSS file: ${cssPath}`);
+      }
     }
 
-    const rawStylesFromExtensionSettings = config.get("CSSRaw", "");
-    if (rawStylesFromExtensionSettings) {
-      const styleTag = `<style>${sanitizeCssForStyleTag(rawStylesFromExtensionSettings)}</style>`;
-      htmlContent += styleTag;
+    const rawCss = config.get<string>("CSSRaw", "");
+    if (rawCss) {
+      htmlContent += `<style>${sanitizeCssForStyleTag(rawCss)}</style>`;
     }
 
-    // Write the modified HTML content back to the file
-    fs.writeFileSync(htmlFilePath, htmlContent);
+    await fs.writeFile(htmlFilePath, htmlContent, "utf-8");
   } catch (error) {
     vscode.window.showErrorMessage(UIMessages.exportToHtmlFailed);
     console.error("Error modifying HTML content:", error);
@@ -114,37 +101,27 @@ const exportHtml = async (isCalledFromExportPdf = false): Promise<[string, strin
     vscode.window.showInformationMessage(UIMessages.exportToHtmlSucceeded);
   }
 
-  // Rename the file if user wants or if calling from export PDF,
-  // and move it if not calling from export PDF and user wants
-  const outputRawFilename = config.get("outputFilename", "");
+  // Rename/move output file if configured
+  const outputRawFilename = config.get<string>("outputFilename", "");
   const outputFilename = isCalledFromExportPdf
     ? crypto.randomBytes(20).toString("hex")
     : sanitizeFilename(outputRawFilename) || path.parse(doc.fileName).name;
-  const outputHome = config.get("outputHome", "");
+  const outputHome = config.get<string>("outputHome", "");
 
   if (outputFilename !== path.parse(doc.fileName).name || (outputHome && !isCalledFromExportPdf)) {
     let renameDirectory: string;
     if (outputHome && !isCalledFromExportPdf) {
-      if (!fs.existsSync(outputHome)) {
-        {
-          fs.mkdirSync(outputHome, { recursive: true });
-        }
-      }
+      await fs.mkdir(outputHome, { recursive: true });
       renameDirectory = outputHome;
     } else {
       renameDirectory = path.parse(doc.fileName).dir;
     }
 
     try {
-      fs.renameSync(
-        convertFileExtension(doc.fileName, ".md", ".html"),
-        path.join(renameDirectory, `${outputFilename}.html`)
-      );
-    } catch (error) {
+      await fs.rename(htmlFilePath, path.join(renameDirectory, `${outputFilename}.html`));
+    } catch {
       if (isCalledFromExportPdf) {
-        fs.unlink(convertFileExtension(doc.fileName, ".md", ".html"), () => {
-          console.log("Temporary HTML file deleted.");
-        });
+        await fs.unlink(htmlFilePath).catch(() => {});
       }
       vscode.window.showErrorMessage(UIMessages.renamingOrMovingHtmlFailed);
       return ["", ""];
@@ -154,36 +131,15 @@ const exportHtml = async (isCalledFromExportPdf = false): Promise<[string, strin
 };
 
 const printToHtml = async (): Promise<boolean> => {
-  const markdownAllInOne = vscode.extensions.getExtension("markdown-all-in-one");
-
-  // is the ext loaded and ready?
-  if (markdownAllInOne?.isActive == false) {
-    return markdownAllInOne.activate().then(
-      function () {
-        console.log("Extension activated");
-        return vscode.commands.executeCommand("markdown.extension.printToHtml").then(
-          () => {
-            return true;
-          },
-          () => {
-            return false;
-          }
-        );
-      },
-      function () {
-        console.log("Extension activation failed");
-        return false;
-      }
-    );
-  } else {
-    return vscode.commands.executeCommand("markdown.extension.printToHtml").then(
-      () => {
-        return true;
-      },
-      () => {
-        return false;
-      }
-    );
+  const ext = vscode.extensions.getExtension("markdown-all-in-one");
+  try {
+    if (ext && !ext.isActive) {
+      await ext.activate();
+    }
+    await vscode.commands.executeCommand("markdown.extension.printToHtml");
+    return true;
+  } catch {
+    return false;
   }
 };
 
