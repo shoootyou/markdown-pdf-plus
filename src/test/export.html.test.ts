@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-empty-function */
-import should from "should";
+import * as assert from "assert";
 import * as sinon from "sinon";
 import { SinonSpy } from "sinon";
 import * as vscode from "vscode";
@@ -22,7 +22,6 @@ describe("export.html", async function () {
   let extensionContext: ExtensionContext;
 
   this.beforeAll(async function () {
-    // save the current global settings for the extension because we're about to change them
     const extension = extensions.getExtension("tom-latham.markdown-pdf-plus");
 
     extensionContext = await extension?.activate();
@@ -39,7 +38,6 @@ describe("export.html", async function () {
   });
 
   this.afterAll(function () {
-    // revert the global settings back to how they were before we started testing
     preTestSettings.forEach((setting) => {
       mrsSettings.update(setting.settingName, setting.settingValue, true);
     });
@@ -55,7 +53,7 @@ describe("export.html", async function () {
         it("tells the user the path is invalid and aborts", async function () {
           const result = await exportHtml();
           sandbox.assert.calledWith(showErrorMessageSpy, UIMessages.invalidInputMarkdownPath);
-          should(result).deepEqual(["", ""]);
+          assert.deepStrictEqual(result, ["", ""]);
         });
       });
       context("when the opened file is not Markdown", function () {
@@ -71,7 +69,7 @@ describe("export.html", async function () {
         it("tells the user the file type is invalid and aborts", async function () {
           const result = await exportHtml();
           sandbox.assert.calledWith(showErrorMessageSpy, UIMessages.invalidInputMarkdownFile);
-          should(result).deepEqual(["", ""]);
+          assert.deepStrictEqual(result, ["", ""]);
         });
       });
       context("when the opened file is Markdown", function () {
@@ -102,7 +100,7 @@ describe("export.html", async function () {
         it("tells the user there is no valid Markdown file and aborts", async function () {
           const result = await exportHtml();
           sandbox.assert.calledWith(showErrorMessageSpy, UIMessages.noValidMarkdownFile);
-          should(result).deepEqual(["", ""]);
+          assert.deepStrictEqual(result, ["", ""]);
         });
       });
       context("when the open editor is not Markdown", function () {
@@ -113,7 +111,7 @@ describe("export.html", async function () {
               await editor.insertSnippet(new SnippetString());
               const result = await exportHtml();
               sandbox.assert.calledWith(showErrorMessageSpy, UIMessages.noValidMarkdownFile);
-              should(result).deepEqual(["", ""]);
+              assert.deepStrictEqual(result, ["", ""]);
             },
             ".txt"
           );
@@ -121,28 +119,4 @@ describe("export.html", async function () {
       });
     });
   });
-
-  // context("when it fails to export the Markdown file to HTML", function () {
-  //   xit("informs the user of the same", function () {});
-  // });
-
-  // context("when it succeeds in exporting the Markdown file to HTML", function () {
-  //   it("informs the user of the same", function () {});
-
-  //   context("when a new editor was opened to export HTML", function () {
-  //     it("closes that editor", function () {});
-  //   });
-
-  //   context("when the user wants the file renamed", function () {
-  //     it("renames the file", function () {});
-  //   });
-
-  //   context(
-  //     "when the user wants the file moved, " +
-  //       "and exporting to HTML isn't intermediary to exporting to another file format",
-  //     function () {
-  //       it("moves the exported resume", function () {});
-  //     }
-  //   );
-  // });
 });

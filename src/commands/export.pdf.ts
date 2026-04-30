@@ -147,16 +147,13 @@ const convertHtmlToPdf = async (htmlFilePath: string, pdfFilePath: string): Prom
 
     // Wait for Mermaid diagrams to finish rendering (if any)
     const hasMermaid = await page.evaluate(
-      () => document.querySelectorAll("pre.mermaid").length > 0
+      `document.querySelectorAll("pre.mermaid").length > 0`
     );
 
     if (hasMermaid) {
       try {
         await page.waitForFunction(
-          () =>
-            Array.from(document.querySelectorAll("pre.mermaid")).every(
-              (el) => el.querySelector("svg") !== null
-            ),
+          `Array.from(document.querySelectorAll("pre.mermaid")).every(el => el.querySelector("svg") !== null)`,
           { timeout: 15000 }
         );
       } catch {
